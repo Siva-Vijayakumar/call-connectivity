@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html>
+<head>
+
+<title>Connectivity Monitor</title>
+
+<style>
+body{
+font-family:Arial;
+background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);
+color:#e6fff5;
+padding:30px;
+min-height:100vh;
+}
+
+h1{
+margin-bottom:30px;
+font-weight:600;
+letter-spacing:1px;
+}
+
+.dashboard{
+display:grid;
+grid-template-columns:repeat(auto-fit,minmax(300px,1fr));
+gap:25px;
+}
+
+.card{
+
+background:rgba(255,255,255,0.08);
+backdrop-filter:blur(12px);
+-webkit-backdrop-filter:blur(12px);
+
+border:1px solid rgba(255,255,255,0.2);
+border-radius:12px;
+
+padding:22px;
+
+box-shadow:
+0 8px 32px rgba(0,0,0,0.35),
+inset 0 0 8px rgba(255,255,255,0.05);
+
+transition:all 0.3s ease;
+
+}
+
+.card:hover{
+transform:translateY(-4px);
+box-shadow:
+0 12px 40px rgba(0,0,0,0.45),
+0 0 15px rgba(0,255,170,0.15);
+}
+
+.card h3{
+margin-bottom:12px;
+font-weight:500;
+color:#a6ffe0;
+}
+
+.metric{
+margin:8px 0;
+font-size:14px;
+color:#dffdf4;
+}
+
+button{
+
+padding:10px 20px;
+
+background:rgba(0,255,170,0.85);
+color:#003b2a;
+
+border:none;
+border-radius:8px;
+
+font-weight:bold;
+cursor:pointer;
+
+box-shadow:
+0 4px 15px rgba(0,255,170,0.3);
+
+transition:all 0.25s ease;
+
+}
+
+button:hover{
+
+background:rgba(0,255,170,1);
+transform:translateY(-1px);
+
+box-shadow:
+0 6px 18px rgba(0,255,170,0.45);
+
+}
+
+
+</style>
+
+</head>
+
+<body>
+
+<h1>Call Connectivity Dashboard</h1>
+
+<div class="dashboard">
+
+<div class="card">
+<h3>Connection</h3>
+
+<p class="metric">Status: <span id="status">Disconnected</span></p>
+<p class="metric">ICE State: <span id="iceState">-</span></p>
+<p class="metric">Duration: <span id="duration">0 s</span></p>
+
+<button id="controlBtn" onclick="toggleConnection()">Start</button>
+
+</div>
+
+
+<div class="card">
+<h3>Packets</h3>
+
+<p class="metric">Packets Sent: <span id="packetsSent">0</span></p>
+<p class="metric">Packets Received: <span id="packetsReceived">0</span></p>
+
+</div>
+
+
+<div class="card">
+<h3>Bytes</h3>
+
+<p class="metric">Bytes Sent: <span id="bytesSent">0</span></p>
+<p class="metric">Bytes Received: <span id="bytesReceived">0</span></p>
+
+</div>
+
+
+<div class="card">
+<h3>Network Metrics</h3>
+
+<p class="metric">RTT: <span id="rtt">0</span></p>
+<p class="metric">Bitrate: <span id="bitrate">0</span></p>
+
+</div>
+
+
+<div class="card">
+<h3>ICE Candidate</h3>
+
+<p class="metric">Local Type: <span id="localType">-</span></p>
+<p class="metric">Remote Type: <span id="remoteType">-</span></p>
+
+</div>
+
+</div>
+
+<script>
+
+let pc;
+let ws;
+let dataChannel;
+let startTime;
+let statsInterval;
+let durationInterval;
+let pingInterval;
+let prevBytesSent = 0;
+let prevTimestamp = 0;
+
+function toggleConnection(){
+
+if(localStorage.getItem("webrtc_active")){
+stopConnection();
+}else{
+startConnection();
+}
+
+}
+
+function startConnection(){
+
+localStorage.setItem("webrtc_active","true");
+
+document.getElementById("controlBtn").innerText="Stop";
+
+document.getElementById("status").innerText="Connecting";
+
+ws = new WebSocket("ws://"+location.host);
+
+pc = new RTCPeerConnection();
+
+startTime = Date.now();
+
+pc.onicecandidate = e=>{
+if(e.candidate){
+ws.send(JSON.stringify({candidate:e.candidate}));
+}
+};
+
+pc.oniceconnectionstatechange = ()=>{
+document.getElementById("iceState").innerText = pc.iceConnectionState;
+};
+
+pc.ondatachannel = event=>{
+
+dataChannel = event.channel;
+
+dataChannel.onopen = ()=>{
+document.getElementById("status").innerText="Connected";
+setInterval(sendPing,500);
+setInterval(()=>{
+if(dataChannel && dataChannel.readyState==="open"){
+dataChannel.send("ping");
+}
+},500);
+};
+
+dataChannel.onmessage = ()=>{
+
+let recv = document.getElementById("packetsReceived");
+recv.innerText = parseInt(recv.innerText)+1;
+
+};
+
+};
+
+ws.onmessage = async msg=>{
+
+let data = JSON.parse(msg.data);
+
+if(data.offer){
+
+await pc.setRemoteDescription(data.offer);
+
+dataChannel = pc.createDataChannel("metrics");
+
+let answer = await pc.createAnswer();
+
+await pc.setLocalDescription(answer);
+
+ws.send(JSON.stringify({answer}));
+
+}
+
+if(data.answer){
+
+await pc.setRemoteDescription(data.answer);
+
+}
+
+if(data.candidate){
+
+await pc.addIceCandidate(data.candidate);
+
+}
+
+};
+
+ws.onopen = async ()=>{
+
+dataChannel = pc.createDataChannel("metrics");
+
+dataChannel.onopen = ()=>{
+
+document.getElementById("status").innerText="Connected";
+
+setInterval(sendPing,500);
+
+};
+
+let offer = await pc.createOffer();
+
+await pc.setLocalDescription(offer);
+
+ws.send(JSON.stringify({offer}));
+
+};
+
+statsInterval = setInterval(getStats,2000);
+durationInterval = setInterval(updateDuration,1000);
+
+}
+function stopConnection(){
+
+localStorage.removeItem("webrtc_active");
+
+clearInterval(statsInterval);
+clearInterval(durationInterval);
+clearInterval(pingInterval);
+
+startTime = null;
+
+if(dataChannel){
+dataChannel.close();
+}
+
+if(pc){
+pc.close();
+}
+
+if(ws){
+ws.close();
+}
+
+document.getElementById("status").innerText="Disconnected";
+document.getElementById("controlBtn").innerText="Start";
+document.getElementById("duration").innerText="0 s";
+
+}
+
+function sendPing(){
+
+if(dataChannel && dataChannel.readyState==="open"){
+
+let payload = "ping-"+Date.now();
+
+dataChannel.send(payload);
+
+let sent = document.getElementById("packetsSent");
+
+sent.innerText = parseInt(sent.innerText)+1;
+
+}
+
+}
+
+function updateDuration(){
+
+if(startTime){
+
+let seconds = Math.floor((Date.now()-startTime)/1000);
+
+document.getElementById("duration").innerText = seconds+" s";
+
+}
+
+}
+
+async function getStats(){
+
+if(!pc) return;
+
+let stats = await pc.getStats();
+
+let candidatePair;
+
+stats.forEach(report=>{
+
+if(report.type==="candidate-pair" && report.state==="succeeded"){
+candidatePair = report;
+}
+
+if(report.type==="local-candidate"){
+document.getElementById("localType").innerText = report.candidateType;
+}
+
+if(report.type==="remote-candidate"){
+document.getElementById("remoteType").innerText = report.candidateType;
+}
+if(report.type==="data-channel"){
+
+if(report.messagesSent)
+document.getElementById("packetsSent").innerText = report.messagesSent;
+
+if(report.messagesReceived)
+document.getElementById("packetsReceived").innerText = report.messagesReceived;
+
+if(report.bytesSent){
+document.getElementById("bytesSent").innerText = report.bytesSent;
+
+/* Bitrate Calculation */
+
+let nowBytes = report.bytesSent;
+let nowTime = report.timestamp;
+
+if(prevBytesSent && prevTimestamp){
+
+let bytesDiff = nowBytes - prevBytesSent;
+let timeDiff = (nowTime - prevTimestamp) / 1000;
+
+let bitrate = (bytesDiff * 8) / timeDiff / 1000;
+
+document.getElementById("bitrate").innerText =
+bitrate.toFixed(2) + " kbps";
+
+
+
+}
+
+prevBytesSent = nowBytes;
+prevTimestamp = nowTime;
+
+}
+
+if(report.bytesReceived)
+document.getElementById("bytesReceived").innerText = report.bytesReceived;
+
+}
+
+});
+
+if(candidatePair){
+
+if(candidatePair.currentRoundTripTime){
+
+document.getElementById("rtt").innerText =
+(candidatePair.currentRoundTripTime*1000).toFixed(2)+" ms";
+
+}
+
+if(candidatePair.availableOutgoingBitrate){
+
+document.getElementById("bitrate").innerText =
+(candidatePair.availableOutgoingBitrate/1000).toFixed(2)+" kbps";
+
+}
+
+}
+
+}
+
+window.onload=()=>{
+
+if(localStorage.getItem("webrtc_active")){
+
+startConnection();
+
+}
+
+};
+
+</script>
+
+</body>
+</html>
