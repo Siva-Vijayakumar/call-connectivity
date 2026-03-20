@@ -26,22 +26,16 @@ gap:25px;
 }
 
 .card{
-
 background:rgba(255,255,255,0.08);
 backdrop-filter:blur(12px);
 -webkit-backdrop-filter:blur(12px);
-
 border:1px solid rgba(255,255,255,0.2);
 border-radius:12px;
-
 padding:22px;
-
 box-shadow:
 0 8px 32px rgba(0,0,0,0.35),
 inset 0 0 8px rgba(255,255,255,0.05);
-
 transition:all 0.3s ease;
-
 }
 
 .card:hover{
@@ -64,36 +58,24 @@ color:#dffdf4;
 }
 
 button{
-
 padding:10px 20px;
-
 background:rgba(0,255,170,0.85);
 color:#003b2a;
-
 border:none;
 border-radius:8px;
-
 font-weight:bold;
 cursor:pointer;
-
 box-shadow:
 0 4px 15px rgba(0,255,170,0.3);
-
 transition:all 0.25s ease;
-
 }
 
 button:hover{
-
 background:rgba(0,255,170,1);
 transform:translateY(-1px);
-
 box-shadow:
 0 6px 18px rgba(0,255,170,0.45);
-
 }
-
-
 </style>
 
 </head>
@@ -106,54 +88,50 @@ box-shadow:
 
 <div class="card">
 <h3>Connection</h3>
-
 <p class="metric">Status: <span id="status">Disconnected</span></p>
 <p class="metric">ICE State: <span id="iceState">-</span></p>
 <p class="metric">Duration: <span id="duration">0 s</span></p>
-
 <button id="controlBtn" onclick="toggleConnection()">Start</button>
-
 </div>
-
 
 <div class="card">
 <h3>Packets</h3>
-
 <p class="metric">Packets Sent: <span id="packetsSent">0</span></p>
 <p class="metric">Packets Received: <span id="packetsReceived">0</span></p>
-
 </div>
-
 
 <div class="card">
 <h3>Bytes</h3>
-
 <p class="metric">Bytes Sent: <span id="bytesSent">0</span></p>
 <p class="metric">Bytes Received: <span id="bytesReceived">0</span></p>
-
 </div>
-
 
 <div class="card">
 <h3>Network Metrics</h3>
-
 <p class="metric">RTT: <span id="rtt">0</span></p>
 <p class="metric">Bitrate: <span id="bitrate">0</span></p>
-
 </div>
-
 
 <div class="card">
 <h3>ICE Candidate</h3>
-
 <p class="metric">Local Type: <span id="localType">-</span></p>
 <p class="metric">Remote Type: <span id="remoteType">-</span></p>
+</div>
 
+<!-- ✅ NEW CARD -->
+<div class="card">
+<h3>Instance Metrics</h3>
+<p class="metric">Instance ID: <span id="instanceId">-</span></p>
+<p class="metric">Server: <span id="server">-</span></p>
+<p class="metric">Reconnect Count: <span id="reconnects">0</span></p>
+<p class="metric">Connection State: <span id="connState">-</span></p>
 </div>
 
 </div>
 
 <script>
+
+
 
 let pc;
 let ws;
@@ -165,14 +143,16 @@ let pingInterval;
 let prevBytesSent = 0;
 let prevTimestamp = 0;
 
-function toggleConnection(){
+/* ✅ NEW VARIABLES */
+let instanceId = Math.random().toString(36).substring(2,8);
+let reconnectCount = 0;
 
+function toggleConnection(){
 if(localStorage.getItem("webrtc_active")){
 stopConnection();
 }else{
 startConnection();
 }
-
 }
 
 function startConnection(){
@@ -180,14 +160,24 @@ function startConnection(){
 localStorage.setItem("webrtc_active","true");
 
 document.getElementById("controlBtn").innerText="Stop";
-
 document.getElementById("status").innerText="Connecting";
 
 ws = new WebSocket("ws://"+location.host);
-
 pc = new RTCPeerConnection();
 
 startTime = Date.now();
+
+/* ✅ TRACK CONNECTION STATE */
+pc.onconnectionstatechange = () => {
+
+document.getElementById("connState").innerText = pc.connectionState;
+
+if(pc.connectionState === "disconnected" || pc.connectionState === "failed"){
+reconnectCount++;
+document.getElementById("reconnects").innerText = reconnectCount;
+}
+
+};
 
 pc.onicecandidate = e=>{
 if(e.candidate){
@@ -200,84 +190,57 @@ document.getElementById("iceState").innerText = pc.iceConnectionState;
 };
 
 pc.ondatachannel = event=>{
-
 dataChannel = event.channel;
 
 dataChannel.onopen = ()=>{
 document.getElementById("status").innerText="Connected";
 setInterval(sendPing,500);
-setInterval(()=>{
-if(dataChannel && dataChannel.readyState==="open"){
-dataChannel.send("ping");
-}
-},500);
 };
 
 dataChannel.onmessage = ()=>{
-
 let recv = document.getElementById("packetsReceived");
 recv.innerText = parseInt(recv.innerText)+1;
-
 };
-
 };
 
 ws.onmessage = async msg=>{
-
 let data = JSON.parse(msg.data);
 
 if(data.offer){
-
 await pc.setRemoteDescription(data.offer);
-
 dataChannel = pc.createDataChannel("metrics");
-
 let answer = await pc.createAnswer();
-
 await pc.setLocalDescription(answer);
-
 ws.send(JSON.stringify({answer}));
-
 }
 
 if(data.answer){
-
 await pc.setRemoteDescription(data.answer);
-
 }
 
 if(data.candidate){
-
 await pc.addIceCandidate(data.candidate);
-
 }
-
 };
 
 ws.onopen = async ()=>{
-
 dataChannel = pc.createDataChannel("metrics");
 
 dataChannel.onopen = ()=>{
-
 document.getElementById("status").innerText="Connected";
-
 setInterval(sendPing,500);
-
 };
 
 let offer = await pc.createOffer();
-
 await pc.setLocalDescription(offer);
-
 ws.send(JSON.stringify({offer}));
-
 };
 
 statsInterval = setInterval(getStats,2000);
 durationInterval = setInterval(updateDuration,1000);
 
 }
+
 function stopConnection(){
 
 localStorage.removeItem("webrtc_active");
@@ -288,50 +251,30 @@ clearInterval(pingInterval);
 
 startTime = null;
 
-if(dataChannel){
-dataChannel.close();
-}
-
-if(pc){
-pc.close();
-}
-
-if(ws){
-ws.close();
-}
+if(dataChannel) dataChannel.close();
+if(pc) pc.close();
+if(ws) ws.close();
 
 document.getElementById("status").innerText="Disconnected";
 document.getElementById("controlBtn").innerText="Start";
 document.getElementById("duration").innerText="0 s";
-
 }
 
 function sendPing(){
-
 if(dataChannel && dataChannel.readyState==="open"){
-
 let payload = "ping-"+Date.now();
-
 dataChannel.send(payload);
 
 let sent = document.getElementById("packetsSent");
-
 sent.innerText = parseInt(sent.innerText)+1;
-
 }
-
 }
 
 function updateDuration(){
-
 if(startTime){
-
 let seconds = Math.floor((Date.now()-startTime)/1000);
-
 document.getElementById("duration").innerText = seconds+" s";
-
 }
-
 }
 
 async function getStats(){
@@ -339,7 +282,6 @@ async function getStats(){
 if(!pc) return;
 
 let stats = await pc.getStats();
-
 let candidatePair;
 
 stats.forEach(report=>{
@@ -355,6 +297,7 @@ document.getElementById("localType").innerText = report.candidateType;
 if(report.type==="remote-candidate"){
 document.getElementById("remoteType").innerText = report.candidateType;
 }
+
 if(report.type==="data-channel"){
 
 if(report.messagesSent)
@@ -366,28 +309,20 @@ document.getElementById("packetsReceived").innerText = report.messagesReceived;
 if(report.bytesSent){
 document.getElementById("bytesSent").innerText = report.bytesSent;
 
-/* Bitrate Calculation */
-
 let nowBytes = report.bytesSent;
 let nowTime = report.timestamp;
 
 if(prevBytesSent && prevTimestamp){
-
 let bytesDiff = nowBytes - prevBytesSent;
 let timeDiff = (nowTime - prevTimestamp) / 1000;
-
 let bitrate = (bytesDiff * 8) / timeDiff / 1000;
 
 document.getElementById("bitrate").innerText =
 bitrate.toFixed(2) + " kbps";
-
-
-
 }
 
 prevBytesSent = nowBytes;
 prevTimestamp = nowTime;
-
 }
 
 if(report.bytesReceived)
@@ -400,33 +335,43 @@ document.getElementById("bytesReceived").innerText = report.bytesReceived;
 if(candidatePair){
 
 if(candidatePair.currentRoundTripTime){
-
 document.getElementById("rtt").innerText =
 (candidatePair.currentRoundTripTime*1000).toFixed(2)+" ms";
-
 }
 
 if(candidatePair.availableOutgoingBitrate){
-
 document.getElementById("bitrate").innerText =
 (candidatePair.availableOutgoingBitrate/1000).toFixed(2)+" kbps";
-
 }
 
 }
 
 }
 
+/* ✅ SET INSTANCE INFO */
 window.onload=()=>{
 
+document.getElementById("instanceId").innerText = instanceId;
+document.getElementById("server").innerText = location.host;
+
 if(localStorage.getItem("webrtc_active")){
-
 startConnection();
-
 }
 
 };
 
+</script>
+
+<script type="text/javascript">
+(function(w,d,s,r,k,h,m){
+	if(w.performance && w.performance.timing && w.performance.navigation && !w.s247r) {
+		w[r] = w[r] || function(){(w[r].q = w[r].q || []).push(arguments)};
+		h=d.createElement('script');h.async=true;h.setAttribute('src',s+k);
+		d.getElementsByTagName('head')[0].appendChild(h);
+		(m = window.onerror),(window.onerror = function (b, c, d, f, g) {
+		m && m(b, c, d, f, g),g || (g = new Error(b)),(w[r].q = w[r].q || []).push(["captureException",g]);})
+	}
+})(window,document,'//static.site24x7rum.in/beacon/site24x7rum-min.js?appKey=','s247r','92930615fcef31efaeb994f1427e0ee9');
 </script>
 
 </body>
